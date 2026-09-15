@@ -38,9 +38,6 @@ const FlightTable = ({
           <h3 className="text-base font-bold text-slate-900">
             Flight Records Explorer
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Parsed from <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded">Flight_Data_Final_Index.csv</code>
-          </p>
         </div>
 
         {/* Rows per page selector */}

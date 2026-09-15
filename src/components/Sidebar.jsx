@@ -6,9 +6,7 @@ import {
   PlaneTakeoff,
   TrendingUp,
   AlertTriangle,
-  Info,
   Database,
-  FileSpreadsheet,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -90,32 +88,8 @@ const Sidebar = ({ isOpen, onClose }) => {
             </nav>
           </div>
 
-          {/* Dataset Status Card */}
-          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 mb-1">
-              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-              <span>Active CSV Dataset</span>
-            </div>
-            <p className="text-[11px] text-slate-500 mb-2">
-              <code className="text-indigo-600 font-mono">Flight_Data_Final_Index.csv</code>
-            </p>
-            <div className="flex justify-between items-center text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
-              <span>Records Parsed:</span>
-              <strong className="font-mono text-slate-800">10,462 Flights</strong>
-            </div>
-          </div>
         </div>
 
-        {/* Sidebar Footer */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50/50">
-          <div className="flex items-start gap-2.5">
-            <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-            <div className="text-[11px] text-slate-500 leading-relaxed">
-              <span className="font-semibold text-slate-700 block mb-0.5">SIH26056 CPI Augmentation</span>
-              Airfare Price Index computed from automated aggregator and airline portal data.
-            </div>
-          </div>
-        </div>
       </aside>
     </>
   );
