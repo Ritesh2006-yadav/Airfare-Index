@@ -1,5 +1,9 @@
 import Papa from 'papaparse';
-import rawCsvContent from '../data/Flight_Data_Final_Index.csv?raw';
+import rawCsvContent from '../data/SIH_AirIndex_Final_Index.csv?raw';
+
+/* =========================================================
+   MONTH NAMES
+========================================================= */
 
 export const MONTH_NAMES = {
   1: 'January',
@@ -16,165 +20,585 @@ export const MONTH_NAMES = {
   12: 'December',
 };
 
-// Cached parsed flights in memory
+/* =========================================================
+   CACHE
+========================================================= */
+
 let cachedFlights = null;
 
-/**
- * Parses numeric total stops string/number
- * e.g., 'non-stop' -> 0, '1 stop' -> 1, 2 -> 2
- */
-const parseStops = (val) => {
-  if (val === null || val === undefined) return 0;
-  if (typeof val === 'number') return val;
-  const s = String(val).toLowerCase().trim();
-  if (s.includes('non') || s === '0') return 0;
-  const match = s.match(/\d+/);
-  return match ? parseInt(match[0], 10) : 0;
+/* =========================================================
+   HELPER: SAFE NUMBER
+========================================================= */
+
+const toNumber = (value, fallback = 0) => {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : fallback;
 };
 
+/* =========================================================
+   HELPER: PARSE STOPS
+========================================================= */
+
 /**
- * Loads and parses src/data/Flight_Data_Final_Index.csv using PapaParse.
- * Converts numeric fields and handles empty/corrupted rows.
+ * Converts different stop formats into a number.
+ *
+ * Examples:
+ * "non-stop" -> 0
+ * "Non Stop" -> 0
+ * "1 stop"   -> 1
+ * "2 stops"  -> 2
+ * 0          -> 0
+ * 1          -> 1
  */
+const parseStops = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return 0;
+  }
+
+  // Already a number
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const text = String(value).toLowerCase().trim();
+
+  // Non-stop
+  if (
+    text.includes('non-stop') ||
+    text.includes('non stop') ||
+    text.includes('nonstop') ||
+    text === '0'
+  ) {
+    return 0;
+  }
+
+  // Extract first number
+  const match = text.match(/\d+/);
+
+  if (match) {
+    return parseInt(match[0], 10);
+  }
+
+  return 0;
+};
+
+/* =========================================================
+   HELPER: BOOKING WINDOW
+========================================================= */
+
+const normalizeBookingWindow = (value) => {
+  if (!value) return 'Unknown';
+
+  const text = String(value).trim().toLowerCase();
+
+  if (text === 'early booking') {
+    return 'Early booking';
+  }
+
+  if (text === 'normal') {
+    return 'Normal';
+  }
+
+  if (text === 'last minute') {
+    return 'Last minute';
+  }
+
+  return String(value).trim();
+};
+
+/* =========================================================
+   LOAD FLIGHT DATA
+========================================================= */
+
 export const loadFlightData = async () => {
+  // Return cached data if already loaded
   if (cachedFlights && cachedFlights.length > 0) {
     return cachedFlights;
   }
 
   return new Promise((resolve, reject) => {
     try {
-      let csvString = rawCsvContent;
+      const csvString = rawCsvContent;
 
+      // If raw import is unavailable, try public folder
       if (!csvString || typeof csvString !== 'string') {
-        // Fallback to fetch if ?raw wasn't available
-        fetch('/Flight_Data_Final_Index.csv')
-          .then((res) => {
-            if (!res.ok) throw new Error('Failed to fetch CSV file');
-            return res.text();
+        fetch('/SIH_AirIndex_Final_Index.csv')
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(
+                'Failed to fetch SIH_AirIndex_Final_Index.csv'
+              );
+            }
+
+            return response.text();
           })
-          .then((text) => parseText(text, resolve, reject))
-          .catch((err) => reject(err));
+          .then((text) => {
+            parseText(text, resolve, reject);
+          })
+          .catch((error) => {
+            reject(error);
+          });
+
         return;
       }
 
       parseText(csvString, resolve, reject);
-    } catch (err) {
-      reject(err);
+    } catch (error) {
+      reject(error);
     }
   });
 };
+
+/* =========================================================
+   PARSE CSV
+========================================================= */
 
 function parseText(csvText, resolve, reject) {
   Papa.parse(csvText, {
     header: true,
     skipEmptyLines: true,
-    dynamicTyping: false, // We will manually and safely convert types
+    dynamicTyping: false,
+
     complete: (results) => {
       try {
         if (!results.data || results.data.length === 0) {
-          return resolve([]);
+          resolve([]);
+          return;
         }
 
         const cleaned = results.data
-          .filter((row) => row.Airline && row.Source && row.Destination && row.Price)
-          .map((row, idx) => {
-            const price = parseFloat(row.Price) || 0;
-            const airfareIndex = parseFloat(row.Airfare_Index) || 100.0;
-            const durationMinutes = parseFloat(row.Duration_Minutes) || 0;
-            const depHour = parseInt(row.Dep_Hour, 10) || 0;
-            const arrivalHour = parseInt(row.Arrival_Hour, 10) || 0;
-            const journeyMonth = parseInt(row.Journey_Month, 10) || 0;
-            const routeMonthMedian = parseFloat(row.Route_Month_Median) || price;
-            const totalStops = parseStops(row.Total_Stops);
+          .filter((row) => {
+            return (
+              row.airline &&
+              row.source_city &&
+              row.destination_city &&
+              row.price !== undefined &&
+              row.price !== ''
+            );
+          })
 
-            // Clean date format
-            let dateClean = row.Date_of_Journey || '';
-            if (dateClean.includes(' ')) {
-              dateClean = dateClean.split(' ')[0];
-            }
+          .map((row, index) => {
+            /* ---------------------------------------------
+               BASIC VALUES
+            --------------------------------------------- */
+
+            const price = toNumber(row.price, 0);
+
+            const airfareIndex = toNumber(
+              row.Airfare_Index,
+              100
+            );
+
+            const durationMinutes = toNumber(
+              row.duration_minutes,
+              0
+            );
+
+            const daysLeft = toNumber(
+              row.days_left,
+              0
+            );
+
+            /* ---------------------------------------------
+               STOPS
+
+               IMPORTANT:
+               New CSV has both:
+               stops
+               stops_numeric
+
+               We prefer stops_numeric when available.
+            --------------------------------------------- */
+
+            const parsedStops = parseStops(row.stops);
+
+            const numericStops =
+              row.stops_numeric !== undefined &&
+              row.stops_numeric !== ''
+                ? toNumber(
+                    row.stops_numeric,
+                    parsedStops
+                  )
+                : parsedStops;
+
+            const totalStops = numericStops;
+
+            /* ---------------------------------------------
+               BOOKING WINDOW
+            --------------------------------------------- */
+
+            const bookingWindow =
+              normalizeBookingWindow(
+                row.booking_window
+              );
+
+            /* ---------------------------------------------
+               ROUTE CLASS MEDIAN
+            --------------------------------------------- */
+
+            const routeClassMedian = toNumber(
+              row.Route_Class_Median,
+              price
+            );
+
+            /* ---------------------------------------------
+               JOURNEY MONTH
+
+               Current SIH CSV does not contain a proper
+               Date_of_Journey column.
+
+               Therefore we keep month as 0 / Unknown
+               instead of inventing a month.
+            --------------------------------------------- */
+
+            const journeyMonth = 0;
+
+            /* ---------------------------------------------
+               RETURN NORMALIZED FLIGHT OBJECT
+            --------------------------------------------- */
 
             return {
-              id: `CSV-${idx + 1}`,
-              Airline: String(row.Airline).trim(),
-              Date_of_Journey: dateClean,
-              Source: String(row.Source).trim(),
-              Destination: String(row.Destination).trim(),
-              Route: String(row.Route || `${row.Source} → ${row.Destination}`).trim(),
-              Dep_Time: String(row.Dep_Time || '').trim(),
-              Arrival_Time: String(row.Arrival_Time || '').trim(),
-              Duration: String(row.Duration || '').trim(),
+              id: `CSV-${index + 1}`,
+
+              /* Airline */
+              Airline: String(
+                row.airline || ''
+              ).trim(),
+
+              /* Flight number/name */
+              Flight: String(
+                row.flight || ''
+              ).trim(),
+
+              /* Journey date is not available in current CSV */
+              Date_of_Journey: '',
+
+              /* Source */
+              Source: String(
+                row.source_city || ''
+              ).trim(),
+
+              /* Destination */
+              Destination: String(
+                row.destination_city || ''
+              ).trim(),
+
+              /* Route */
+              Route: String(
+                row.route ||
+                  `${row.source_city} → ${row.destination_city}`
+              ).trim(),
+
+              /* Departure */
+              Dep_Time: String(
+                row.departure_time || ''
+              ).trim(),
+
+              /* Arrival */
+              Arrival_Time: String(
+                row.arrival_time || ''
+              ).trim(),
+
+              /* Duration */
+              Duration: String(
+                row.duration || ''
+              ).trim(),
+
+              /* -----------------------------------------
+                 STOPS
+              ----------------------------------------- */
+
               Total_Stops: totalStops,
-              Additional_Info: String(row.Additional_Info || 'No info').trim(),
+
+              Stops_Numeric: numericStops,
+
+              /* -----------------------------------------
+                 CLASS
+              ----------------------------------------- */
+
+              Additional_Info: String(
+                row.class || 'Economy'
+              ).trim(),
+
+              Class: String(
+                row.class || 'Economy'
+              ).trim(),
+
+              /* -----------------------------------------
+                 PRICE
+              ----------------------------------------- */
+
               Price: price,
+
+              /* -----------------------------------------
+                 DURATION
+              ----------------------------------------- */
+
               Duration_Minutes: durationMinutes,
-              Dep_Hour: depHour,
-              Arrival_Hour: arrivalHour,
+
+              /* -----------------------------------------
+                 TIME FIELDS
+
+                 Current CSV contains categorical time
+                 labels, not exact hours.
+              ----------------------------------------- */
+
+              Dep_Hour: 0,
+
+              Arrival_Hour: 0,
+
+              /* -----------------------------------------
+                 MONTH
+              ----------------------------------------- */
+
               Journey_Month: journeyMonth,
-              Month_Name: MONTH_NAMES[journeyMonth] || `Month ${journeyMonth}`,
-              Route_Month_Median: routeMonthMedian,
-              Airfare_Index: Number(airfareIndex.toFixed(2)),
+
+              Month_Name:
+                MONTH_NAMES[journeyMonth] ||
+                'Unknown',
+
+              /* -----------------------------------------
+                 ROUTE MEDIAN
+              ----------------------------------------- */
+
+              Route_Month_Median:
+                routeClassMedian,
+
+              /* -----------------------------------------
+                 AIRFARE INDEX
+              ----------------------------------------- */
+
+              Airfare_Index: Number(
+                airfareIndex.toFixed(2)
+              ),
+
+              /* -----------------------------------------
+                 BOOKING WINDOW
+              ----------------------------------------- */
+
+              Days_Left: daysLeft,
+
+              Booking_Window: bookingWindow,
             };
           });
 
         cachedFlights = cleaned;
+
         resolve(cleaned);
-      } catch (parseErr) {
-        reject(parseErr);
+      } catch (error) {
+        reject(error);
       }
     },
+
     error: (error) => {
       reject(error);
     },
   });
 }
 
-/**
- * Generates unique dropdown filter options from the dataset
- */
-export const getFilterOptions = (flights = []) => {
-  const airlines = Array.from(new Set(flights.map((f) => f.Airline).filter(Boolean))).sort();
-  const sources = Array.from(new Set(flights.map((f) => f.Source).filter(Boolean))).sort();
-  const destinations = Array.from(new Set(flights.map((f) => f.Destination).filter(Boolean))).sort();
-  
-  const monthNums = Array.from(new Set(flights.map((f) => f.Journey_Month).filter(Boolean))).sort(
-    (a, b) => a - b
-  );
-  const months = monthNums.map((m) => ({
-    num: m,
-    name: MONTH_NAMES[m] || `Month ${m}`,
+/* =========================================================
+   FILTER OPTIONS
+========================================================= */
+
+export const getFilterOptions = (
+  flights = []
+) => {
+  if (!flights || flights.length === 0) {
+    return {
+      airlines: [],
+      sources: [],
+      destinations: [],
+      months: [],
+      bookingWindows: [],
+    };
+  }
+
+  /* ---------------------------------------------
+     AIRLINES
+  --------------------------------------------- */
+
+  const airlines = Array.from(
+    new Set(
+      flights
+        .map((flight) => flight.Airline)
+        .filter(Boolean)
+    )
+  ).sort();
+
+  /* ---------------------------------------------
+     SOURCES
+  --------------------------------------------- */
+
+  const sources = Array.from(
+    new Set(
+      flights
+        .map((flight) => flight.Source)
+        .filter(Boolean)
+    )
+  ).sort();
+
+  /* ---------------------------------------------
+     DESTINATIONS
+  --------------------------------------------- */
+
+  const destinations = Array.from(
+    new Set(
+      flights
+        .map((flight) => flight.Destination)
+        .filter(Boolean)
+    )
+  ).sort();
+
+  /* ---------------------------------------------
+     BOOKING WINDOWS
+  --------------------------------------------- */
+
+  const bookingOrder = {
+    'Early booking': 1,
+    Normal: 2,
+    'Last minute': 3,
+  };
+
+  const bookingWindows = Array.from(
+    new Set(
+      flights
+        .map((flight) => flight.Booking_Window)
+        .filter(Boolean)
+    )
+  ).sort((a, b) => {
+    return (
+      (bookingOrder[a] || 99) -
+      (bookingOrder[b] || 99)
+    );
+  });
+
+  /* ---------------------------------------------
+     MONTHS
+
+     Current dataset does not contain journey date.
+     So only add months if valid month data exists.
+  --------------------------------------------- */
+
+  const monthNumbers = Array.from(
+    new Set(
+      flights
+        .map((flight) => flight.Journey_Month)
+        .filter(
+          (month) =>
+            Number.isInteger(month) &&
+            month >= 1 &&
+            month <= 12
+        )
+    )
+  ).sort((a, b) => a - b);
+
+  const months = monthNumbers.map((num) => ({
+    num,
+    name: MONTH_NAMES[num],
   }));
 
-  return { airlines, sources, destinations, months };
+  return {
+    airlines,
+    sources,
+    destinations,
+    months,
+    bookingWindows,
+  };
 };
 
-/**
- * Filter flights in-memory based on selected filter criteria
- */
-export const filterFlights = (flights = [], filters = {}) => {
-  if (!flights || flights.length === 0) return [];
+/* =========================================================
+   FILTER FLIGHTS
+========================================================= */
+
+export const filterFlights = (
+  flights = [],
+  filters = {}
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
 
   return flights.filter((flight) => {
-    if (filters.airline && filters.airline !== 'All' && flight.Airline !== filters.airline) {
+    /* ---------------------------------------------
+       AIRLINE
+    --------------------------------------------- */
+
+    if (
+      filters.airline &&
+      filters.airline !== 'All' &&
+      flight.Airline !== filters.airline
+    ) {
       return false;
     }
-    if (filters.source && filters.source !== 'All' && flight.Source !== filters.source) {
+
+    /* ---------------------------------------------
+       SOURCE
+    --------------------------------------------- */
+
+    if (
+      filters.source &&
+      filters.source !== 'All' &&
+      flight.Source !== filters.source
+    ) {
       return false;
     }
-    if (filters.destination && filters.destination !== 'All' && flight.Destination !== filters.destination) {
+
+    /* ---------------------------------------------
+       DESTINATION
+    --------------------------------------------- */
+
+    if (
+      filters.destination &&
+      filters.destination !== 'All' &&
+      flight.Destination !== filters.destination
+    ) {
       return false;
     }
-    if (filters.month && filters.month !== 'All') {
-      const targetMonth = parseInt(filters.month, 10);
-      if (flight.Journey_Month !== targetMonth) return false;
+
+    /* ---------------------------------------------
+       BOOKING WINDOW
+    --------------------------------------------- */
+
+    if (
+      filters.bookingWindow &&
+      filters.bookingWindow !== 'All' &&
+      flight.Booking_Window !==
+        filters.bookingWindow
+    ) {
+      return false;
     }
+
+    /* ---------------------------------------------
+       MONTH
+
+       Kept for compatibility with existing dashboard.
+    --------------------------------------------- */
+
+    if (
+      filters.month &&
+      filters.month !== 'All' &&
+      Number(flight.Journey_Month) !==
+        Number(filters.month)
+    ) {
+      return false;
+    }
+
     return true;
   });
 };
 
-/**
- * Calculate the 4 primary statistic cards for the dashboard
- */
-export const calculateOverviewStats = (flights = []) => {
+/* =========================================================
+   DASHBOARD OVERVIEW STATS
+========================================================= */
+
+export const calculateOverviewStats = (
+  flights = []
+) => {
   if (!flights || flights.length === 0) {
     return {
       currentAirfareIndex: 0,
@@ -185,15 +609,72 @@ export const calculateOverviewStats = (flights = []) => {
     };
   }
 
+  /* ---------------------------------------------
+     TOTAL FLIGHTS
+  --------------------------------------------- */
+
   const totalFlights = flights.length;
-  const totalPrice = flights.reduce((sum, f) => sum + f.Price, 0);
-  const totalIndex = flights.reduce((sum, f) => sum + f.Airfare_Index, 0);
 
-  const averagePrice = Math.round(totalPrice / totalFlights);
-  const currentAirfareIndex = Number((totalIndex / totalFlights).toFixed(2));
+  /* ---------------------------------------------
+     TOTAL PRICE
+  --------------------------------------------- */
 
-  const uniqueAirlines = new Set(flights.map((f) => f.Airline)).size;
-  const uniqueRoutes = new Set(flights.map((f) => `${f.Source} → ${f.Destination}`)).size;
+  const totalPrice = flights.reduce(
+    (sum, flight) =>
+      sum + toNumber(flight.Price),
+    0
+  );
+
+  /* ---------------------------------------------
+     TOTAL INDEX
+  --------------------------------------------- */
+
+  const totalIndex = flights.reduce(
+    (sum, flight) =>
+      sum + toNumber(flight.Airfare_Index),
+    0
+  );
+
+  /* ---------------------------------------------
+     AVERAGE PRICE
+  --------------------------------------------- */
+
+  const averagePrice = Math.round(
+    totalPrice / totalFlights
+  );
+
+  /* ---------------------------------------------
+     CURRENT AIRFARE INDEX
+  --------------------------------------------- */
+
+  const currentAirfareIndex = Number(
+    (
+      totalIndex / totalFlights
+    ).toFixed(2)
+  );
+
+  /* ---------------------------------------------
+     UNIQUE AIRLINES
+  --------------------------------------------- */
+
+  const uniqueAirlines = new Set(
+    flights
+      .map((flight) => flight.Airline)
+      .filter(Boolean)
+  ).size;
+
+  /* ---------------------------------------------
+     UNIQUE ROUTES
+  --------------------------------------------- */
+
+  const uniqueRoutes = new Set(
+    flights
+      .map(
+        (flight) =>
+          `${flight.Source} → ${flight.Destination}`
+      )
+      .filter(Boolean)
+  ).size;
 
   return {
     currentAirfareIndex,
@@ -204,155 +685,658 @@ export const calculateOverviewStats = (flights = []) => {
   };
 };
 
-/**
- * Aggregate Airfare Index by Month for line chart
- */
-export const getMonthlyIndexData = (flights = []) => {
-  if (!flights || flights.length === 0) return [];
+/* =========================================================
+   AIRFARE INDEX BY BOOKING WINDOW
+========================================================= */
+
+export const getMonthlyIndexData = (
+  flights = []
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
 
   const groups = {};
-  flights.forEach((f) => {
-    const m = f.Journey_Month;
-    if (!groups[m]) {
-      groups[m] = {
-        monthNum: m,
-        monthName: MONTH_NAMES[m] || `M${m}`,
+
+  flights.forEach((flight) => {
+    const bookingWindow =
+      flight.Booking_Window || 'Unknown';
+
+    if (!groups[bookingWindow]) {
+      groups[bookingWindow] = {
+        bookingWindow,
         totalIndex: 0,
         totalPrice: 0,
         count: 0,
       };
     }
-    groups[m].totalIndex += f.Airfare_Index;
-    groups[m].totalPrice += f.Price;
-    groups[m].count += 1;
+
+    groups[bookingWindow].totalIndex +=
+      toNumber(flight.Airfare_Index);
+
+    groups[bookingWindow].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[bookingWindow].count += 1;
   });
 
+  const order = {
+    'Early booking': 1,
+    Normal: 2,
+    'Last minute': 3,
+  };
+
   return Object.values(groups)
-    .sort((a, b) => a.monthNum - b.monthNum)
-    .map((g) => ({
-      month: g.monthName,
-      monthNum: g.monthNum,
-      Airfare_Index: Number((g.totalIndex / g.count).toFixed(2)),
-      Average_Price: Math.round(g.totalPrice / g.count),
-      Flight_Count: g.count,
+    .sort(
+      (a, b) =>
+        (order[a.bookingWindow] || 99) -
+        (order[b.bookingWindow] || 99)
+    )
+    .map((group) => ({
+      month: group.bookingWindow,
+
+      monthNum:
+        order[group.bookingWindow] || 99,
+
+      Airfare_Index: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      Average_Price: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      Flight_Count: group.count,
     }));
 };
 
-/**
- * Aggregate Average Price by Airline for bar chart
- */
-export const getAirlinePriceData = (flights = []) => {
-  if (!flights || flights.length === 0) return [];
+/* =========================================================
+   AVERAGE PRICE BY AIRLINE
+========================================================= */
+
+export const getAirlinePriceData = (
+  flights = []
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
 
   const groups = {};
-  flights.forEach((f) => {
-    const a = f.Airline;
-    if (!groups[a]) {
-      groups[a] = {
-        airline: a,
+
+  flights.forEach((flight) => {
+    const airline = flight.Airline;
+
+    if (!airline) return;
+
+    if (!groups[airline]) {
+      groups[airline] = {
+        airline,
         totalPrice: 0,
         totalIndex: 0,
         totalDuration: 0,
         count: 0,
       };
     }
-    groups[a].totalPrice += f.Price;
-    groups[a].totalIndex += f.Airfare_Index;
-    groups[a].totalDuration += f.Duration_Minutes;
-    groups[a].count += 1;
+
+    groups[airline].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[airline].totalIndex +=
+      toNumber(flight.Airfare_Index);
+
+    groups[airline].totalDuration +=
+      toNumber(flight.Duration_Minutes);
+
+    groups[airline].count += 1;
   });
 
   return Object.values(groups)
-    .map((g) => ({
-      airline: g.airline,
-      avgPrice: Math.round(g.totalPrice / g.count),
-      avgIndex: Number((g.totalIndex / g.count).toFixed(2)),
-      avgDuration: Math.round(g.totalDuration / g.count),
-      flightCount: g.count,
+    .map((group) => ({
+      airline: group.airline,
+
+      avgPrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      avgIndex: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      avgDuration: Math.round(
+        group.totalDuration /
+          group.count
+      ),
+
+      flightCount: group.count,
     }))
-    .sort((a, b) => a.avgPrice - b.avgPrice);
+    .sort(
+      (a, b) =>
+        a.avgPrice - b.avgPrice
+    );
 };
 
-/**
- * Aggregate Average Price by Route for route chart
- */
-export const getRoutePriceData = (flights = [], limit = 12) => {
-  if (!flights || flights.length === 0) return [];
+/* =========================================================
+   AVERAGE PRICE BY ROUTE
+========================================================= */
+
+export const getRoutePriceData = (
+  flights = [],
+  limit = 12
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
 
   const groups = {};
-  flights.forEach((f) => {
-    const key = `${f.Source} → ${f.Destination}`;
+
+  flights.forEach((flight) => {
+    if (!flight.Source || !flight.Destination) {
+      return;
+    }
+
+    const key =
+      `${flight.Source} → ${flight.Destination}`;
+
     if (!groups[key]) {
       groups[key] = {
         route: key,
-        source: f.Source,
-        destination: f.Destination,
+        source: flight.Source,
+        destination: flight.Destination,
         totalPrice: 0,
         totalIndex: 0,
         totalDuration: 0,
         count: 0,
       };
     }
-    groups[key].totalPrice += f.Price;
-    groups[key].totalIndex += f.Airfare_Index;
-    groups[key].totalDuration += f.Duration_Minutes;
+
+    groups[key].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[key].totalIndex +=
+      toNumber(flight.Airfare_Index);
+
+    groups[key].totalDuration +=
+      toNumber(flight.Duration_Minutes);
+
     groups[key].count += 1;
   });
 
   return Object.values(groups)
-    .map((g) => ({
-      route: g.route,
-      source: g.source,
-      destination: g.destination,
-      avgPrice: Math.round(g.totalPrice / g.count),
-      avgIndex: Number((g.totalIndex / g.count).toFixed(2)),
-      avgDuration: Math.round(g.totalDuration / g.count),
-      flightCount: g.count,
+    .map((group) => ({
+      route: group.route,
+
+      source: group.source,
+
+      destination: group.destination,
+
+      avgPrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      avgIndex: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      avgDuration: Math.round(
+        group.totalDuration /
+          group.count
+      ),
+
+      flightCount: group.count,
     }))
-    .sort((a, b) => b.flightCount - a.flightCount)
+    .sort(
+      (a, b) =>
+        b.flightCount -
+        a.flightCount
+    )
     .slice(0, limit);
 };
 
-/**
- * Aggregate Price by Total Stops for distribution chart
- */
-export const getStopsPriceData = (flights = []) => {
-  if (!flights || flights.length === 0) return [];
+/* =========================================================
+   PRICE BY NUMBER OF STOPS
+========================================================= */
+
+export const getStopsPriceData = (
+  flights = []
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
 
   const groups = {
-    0: { stopsLabel: 'Non-stop (0)', totalPrice: 0, totalIndex: 0, count: 0 },
-    1: { stopsLabel: '1 Stop', totalPrice: 0, totalIndex: 0, count: 0 },
-    2: { stopsLabel: '2 Stops', totalPrice: 0, totalIndex: 0, count: 0 },
-    3: { stopsLabel: '3+ Stops', totalPrice: 0, totalIndex: 0, count: 0 },
+    0: {
+      stopsLabel: 'Non-stop (0)',
+      totalPrice: 0,
+      totalIndex: 0,
+      count: 0,
+    },
+
+    1: {
+      stopsLabel: '1 Stop',
+      totalPrice: 0,
+      totalIndex: 0,
+      count: 0,
+    },
+
+    2: {
+      stopsLabel: '2 Stops',
+      totalPrice: 0,
+      totalIndex: 0,
+      count: 0,
+    },
+
+    3: {
+      stopsLabel: '3+ Stops',
+      totalPrice: 0,
+      totalIndex: 0,
+      count: 0,
+    },
   };
 
-  flights.forEach((f) => {
-    const s = f.Total_Stops >= 3 ? 3 : f.Total_Stops;
-    if (groups[s]) {
-      groups[s].totalPrice += f.Price;
-      groups[s].totalIndex += f.Airfare_Index;
-      groups[s].count += 1;
+  flights.forEach((flight) => {
+    /* ---------------------------------------------
+       IMPORTANT FIX
+
+       Use Stops_Numeric first.
+       Fall back to Total_Stops.
+    --------------------------------------------- */
+
+    const rawStops =
+      flight.Stops_Numeric !== undefined &&
+      flight.Stops_Numeric !== null
+        ? flight.Stops_Numeric
+        : flight.Total_Stops;
+
+    let stops = parseStops(rawStops);
+
+    /* Anything 3 or above goes into 3+ */
+    if (stops >= 3) {
+      stops = 3;
     }
+
+    if (!groups[stops]) {
+      return;
+    }
+
+    groups[stops].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[stops].totalIndex +=
+      toNumber(flight.Airfare_Index);
+
+    groups[stops].count += 1;
   });
 
   return Object.values(groups)
-    .filter((g) => g.count > 0)
-    .map((g) => ({
-      stops: g.stopsLabel,
-      avgPrice: Math.round(g.totalPrice / g.count),
-      avgIndex: Number((g.totalIndex / g.count).toFixed(2)),
-      flightCount: g.count,
+    .filter(
+      (group) => group.count > 0
+    )
+    .map((group) => ({
+      stops: group.stopsLabel,
+
+      avgPrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      avgIndex: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      flightCount: group.count,
     }));
 };
 
-/**
- * Format Indian Rupee currency: 5240 -> "₹5,240"
- */
-export const formatCurrency = (amount) => {
-  if (amount === null || amount === undefined || isNaN(amount)) return '₹0';
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(amount);
+/* =========================================================
+   ROUTE-SPECIFIC SUMMARY
+========================================================= */
+
+export const getRouteSummary = (
+  flights = [],
+  source,
+  destination
+) => {
+  if (!flights || flights.length === 0) {
+    return {
+      averagePrice: 0,
+      airfareIndex: 0,
+      flightCount: 0,
+      averageDuration: 0,
+      averageStops: 0,
+    };
+  }
+
+  const routeFlights = flights.filter(
+    (flight) => {
+      const sourceMatch =
+        !source ||
+        source === 'All' ||
+        flight.Source === source;
+
+      const destinationMatch =
+        !destination ||
+        destination === 'All' ||
+        flight.Destination === destination;
+
+      return (
+        sourceMatch &&
+        destinationMatch
+      );
+    }
+  );
+
+  if (routeFlights.length === 0) {
+    return {
+      averagePrice: 0,
+      airfareIndex: 0,
+      flightCount: 0,
+      averageDuration: 0,
+      averageStops: 0,
+    };
+  }
+
+  const totalPrice =
+    routeFlights.reduce(
+      (sum, flight) =>
+        sum + toNumber(flight.Price),
+      0
+    );
+
+  const totalIndex =
+    routeFlights.reduce(
+      (sum, flight) =>
+        sum +
+        toNumber(
+          flight.Airfare_Index
+        ),
+      0
+    );
+
+  const totalDuration =
+    routeFlights.reduce(
+      (sum, flight) =>
+        sum +
+        toNumber(
+          flight.Duration_Minutes
+        ),
+      0
+    );
+
+  const totalStops =
+    routeFlights.reduce(
+      (sum, flight) =>
+        sum +
+        toNumber(
+          flight.Stops_Numeric ??
+            flight.Total_Stops
+        ),
+      0
+    );
+
+  return {
+    averagePrice: Math.round(
+      totalPrice /
+        routeFlights.length
+    ),
+
+    airfareIndex: Number(
+      (
+        totalIndex /
+        routeFlights.length
+      ).toFixed(2)
+    ),
+
+    flightCount:
+      routeFlights.length,
+
+    averageDuration: Math.round(
+      totalDuration /
+        routeFlights.length
+    ),
+
+    averageStops: Number(
+      (
+        totalStops /
+        routeFlights.length
+      ).toFixed(2)
+    ),
+  };
+};
+
+/* =========================================================
+   ROUTE PRICE BY BOOKING WINDOW
+========================================================= */
+
+export const getRouteBookingWindowData = (
+  flights = [],
+  source,
+  destination
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
+
+  const routeFlights = flights.filter(
+    (flight) => {
+      const sourceMatch =
+        !source ||
+        source === 'All' ||
+        flight.Source === source;
+
+      const destinationMatch =
+        !destination ||
+        destination === 'All' ||
+        flight.Destination === destination;
+
+      return (
+        sourceMatch &&
+        destinationMatch
+      );
+    }
+  );
+
+  if (routeFlights.length === 0) {
+    return [];
+  }
+
+  const groups = {};
+
+  routeFlights.forEach((flight) => {
+    const window =
+      flight.Booking_Window ||
+      'Unknown';
+
+    if (!groups[window]) {
+      groups[window] = {
+        bookingWindow: window,
+        totalPrice: 0,
+        totalIndex: 0,
+        count: 0,
+      };
+    }
+
+    groups[window].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[window].totalIndex +=
+      toNumber(
+        flight.Airfare_Index
+      );
+
+    groups[window].count += 1;
+  });
+
+  const order = {
+    'Early booking': 1,
+    Normal: 2,
+    'Last minute': 3,
+  };
+
+  return Object.values(groups)
+    .sort(
+      (a, b) =>
+        (order[a.bookingWindow] ||
+          99) -
+        (order[b.bookingWindow] ||
+          99)
+    )
+    .map((group) => ({
+      bookingWindow:
+        group.bookingWindow,
+
+      month:
+        group.bookingWindow,
+
+      avgPrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      averagePrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      avgIndex: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      Airfare_Index: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      flightCount:
+        group.count,
+    }));
+};
+
+/* =========================================================
+   AIRLINES ON A ROUTE
+========================================================= */
+
+export const getRouteAirlineData = (
+  flights = [],
+  source,
+  destination
+) => {
+  if (!flights || flights.length === 0) {
+    return [];
+  }
+
+  const routeFlights = flights.filter(
+    (flight) => {
+      const sourceMatch =
+        !source ||
+        source === 'All' ||
+        flight.Source === source;
+
+      const destinationMatch =
+        !destination ||
+        destination === 'All' ||
+        flight.Destination === destination;
+
+      return (
+        sourceMatch &&
+        destinationMatch
+      );
+    }
+  );
+
+  const groups = {};
+
+  routeFlights.forEach((flight) => {
+    const airline = flight.Airline;
+
+    if (!airline) return;
+
+    if (!groups[airline]) {
+      groups[airline] = {
+        airline,
+        totalPrice: 0,
+        totalIndex: 0,
+        count: 0,
+      };
+    }
+
+    groups[airline].totalPrice +=
+      toNumber(flight.Price);
+
+    groups[airline].totalIndex +=
+      toNumber(
+        flight.Airfare_Index
+      );
+
+    groups[airline].count += 1;
+  });
+
+  return Object.values(groups)
+    .map((group) => ({
+      airline: group.airline,
+
+      avgPrice: Math.round(
+        group.totalPrice /
+          group.count
+      ),
+
+      avgIndex: Number(
+        (
+          group.totalIndex /
+          group.count
+        ).toFixed(2)
+      ),
+
+      flightCount:
+        group.count,
+    }))
+    .sort(
+      (a, b) =>
+        b.flightCount -
+        a.flightCount
+    );
+};
+
+/* =========================================================
+   FORMAT INDIAN RUPEE CURRENCY
+========================================================= */
+
+export const formatCurrency = (
+ amount
+) => {
+  if (
+    amount === null ||
+    amount === undefined ||
+    Number.isNaN(Number(amount))
+  ) {
+    return '₹0';
+  }
+
+  return new Intl.NumberFormat(
+    'en-IN',
+    {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0,
+    }
+  ).format(amount);
 };

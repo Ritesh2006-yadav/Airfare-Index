@@ -1,301 +1,1596 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { loadFlightData, formatCurrency } from '../services/flightDataService';
-import api from '../services/api';
-import ChartCard from '../components/ChartCard';
-import Loading from '../components/Loading';
-import ErrorMessage from '../components/ErrorMessage';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  AreaChart,
-  Area,
+  ResponsiveContainer,
+  ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
-  ComposedChart,
 } from 'recharts';
+
 import {
-  Sparkles,
-  Info,
   TrendingUp,
-  AlertCircle,
-  Code2,
-  Calendar,
-  Layers,
-  ArrowRight,
+  TrendingDown,
+  Minus,
+  Info,
+  Plane,
+  CalendarDays,
+  BarChart3,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 
+import {
+  loadFlightData,
+  formatCurrency,
+} from '../services/flightDataService';
+
+import Loading from '../components/Loading';
+import ErrorMessage from '../components/ErrorMessage';
+
+
+/* =========================================================
+   AIRFARE FORECAST / HISTORICAL OUTLOOK
+
+   IMPORTANT:
+   This page uses actual observations from the CSV.
+
+   The dataset contains:
+   - days_left
+   - price
+   - Airfare_Index
+   - booking_window
+
+   It does NOT contain a timestamp showing when each
+   observation was collected.
+
+   Therefore this page shows a HISTORICAL BOOKING-WINDOW
+   PATTERN and does not claim to predict future calendar prices.
+========================================================= */
+
+
 const Forecast = () => {
+  /* =======================================================
+     STATE
+  ======================================================= */
+
   const [allFlights, setAllFlights] = useState([]);
+
   const [loading, setLoading] = useState(true);
+
   const [error, setError] = useState(null);
 
-  const [selectedSource, setSelectedSource] = useState('Bangalore');
-  const [selectedDestination, setSelectedDestination] = useState('New Delhi');
-  const [forecastData, setForecastData] = useState(null);
+  const [selectedSource, setSelectedSource] =
+    useState('Delhi');
 
-  const sources = useMemo(() => {
-    return Array.from(new Set(allFlights.map((f) => f.Source).filter(Boolean))).sort();
-  }, [allFlights]);
+  const [selectedDestination, setSelectedDestination] =
+    useState('Mumbai');
 
-  const destinations = useMemo(() => {
-    return Array.from(new Set(allFlights.map((f) => f.Destination).filter(Boolean))).sort();
-  }, [allFlights]);
+
+  /* =======================================================
+     LOAD CSV DATA
+  ======================================================= */
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await loadFlightData();
-      setAllFlights(data);
 
-      const fData = await api.getForecast(selectedSource, selectedDestination);
-      setForecastData(fData);
+      const data = await loadFlightData();
+
+      setAllFlights(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('Error loading forecast', err);
-      setError('Unable to load forecast module.');
+      console.error('Error loading forecast data:', err);
+
+      setError(
+        'Unable to load airfare outlook data from the CSV dataset.'
+      );
     } finally {
       setLoading(false);
     }
   };
 
+
   useEffect(() => {
     fetchData();
-  }, [selectedSource, selectedDestination]);
+  }, []);
 
-  if (loading && !forecastData) {
-    return <Loading message="Loading airfare forecast structure..." />;
+
+  /* =======================================================
+     SOURCE OPTIONS
+  ======================================================= */
+
+  const sources = useMemo(() => {
+    return Array.from(
+      new Set(
+        allFlights
+          .map((flight) => flight.Source)
+          .filter(Boolean)
+      )
+    ).sort();
+  }, [allFlights]);
+
+
+  /* =======================================================
+     DESTINATION OPTIONS
+
+     Only destinations available from the selected source
+     are shown.
+  ======================================================= */
+
+  const destinations = useMemo(() => {
+    const filteredDestinations = allFlights
+      .filter(
+        (flight) =>
+          flight.Source === selectedSource &&
+          flight.Destination
+      )
+      .map((flight) => flight.Destination);
+
+    return Array.from(
+      new Set(filteredDestinations)
+    ).sort();
+  }, [allFlights, selectedSource]);
+
+
+  /* =======================================================
+     VALIDATE SOURCE
+  ======================================================= */
+
+  useEffect(() => {
+    if (!allFlights.length) return;
+
+    const sourceExists = sources.includes(
+      selectedSource
+    );
+
+    if (!sourceExists && sources.length > 0) {
+      setSelectedSource(sources[0]);
+    }
+  }, [
+    allFlights,
+    sources,
+    selectedSource,
+  ]);
+
+
+  /* =======================================================
+     VALIDATE DESTINATION
+
+     If selected source changes and the old destination
+     is unavailable, automatically select a valid route.
+  ======================================================= */
+
+  useEffect(() => {
+    if (!destinations.length) return;
+
+    if (!destinations.includes(selectedDestination)) {
+      setSelectedDestination(destinations[0]);
+    }
+  }, [
+    destinations,
+    selectedDestination,
+  ]);
+
+
+  /* =======================================================
+     SELECTED ROUTE DATA
+  ======================================================= */
+
+  const routeFlights = useMemo(() => {
+    if (!allFlights.length) return [];
+
+    return allFlights.filter(
+      (flight) =>
+        flight.Source === selectedSource &&
+        flight.Destination === selectedDestination
+    );
+  }, [
+    allFlights,
+    selectedSource,
+    selectedDestination,
+  ]);
+
+
+  /* =======================================================
+     MEDIAN FUNCTION
+  ======================================================= */
+
+  const calculateMedian = (values) => {
+    if (!values || values.length === 0) {
+      return 0;
+    }
+
+    const sorted = [...values]
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+
+    if (!sorted.length) {
+      return 0;
+    }
+
+    const middle = Math.floor(
+      sorted.length / 2
+    );
+
+    if (sorted.length % 2 === 0) {
+      return (
+        (sorted[middle - 1] +
+          sorted[middle]) /
+        2
+      );
+    }
+
+    return sorted[middle];
+  };
+
+
+  /* =======================================================
+     15-DAY HISTORICAL BOOKING-WINDOW DATA
+
+     Days left:
+     1 → 15
+
+     Price:
+     Median observed fare
+
+     Index:
+     Average observed Airfare Index
+  ======================================================= */
+
+  const forecastData = useMemo(() => {
+    if (!routeFlights.length) {
+      return [];
+    }
+
+    const groups = {};
+
+    routeFlights.forEach((flight) => {
+      const daysLeft = Number(
+        flight.Days_Left
+      );
+
+      const price = Number(
+        flight.Price
+      );
+
+      const airfareIndex = Number(
+        flight.Airfare_Index
+      );
+
+      if (
+        !Number.isFinite(daysLeft) ||
+        !Number.isFinite(price)
+      ) {
+        return;
+      }
+
+      if (
+        daysLeft < 1 ||
+        daysLeft > 15
+      ) {
+        return;
+      }
+
+      if (!groups[daysLeft]) {
+        groups[daysLeft] = {
+          daysLeft,
+          prices: [],
+          indexes: [],
+          count: 0,
+        };
+      }
+
+      groups[daysLeft].prices.push(price);
+
+      if (
+        Number.isFinite(airfareIndex)
+      ) {
+        groups[daysLeft].indexes.push(
+          airfareIndex
+        );
+      }
+
+      groups[daysLeft].count += 1;
+    });
+
+
+    return Object.values(groups)
+      .sort(
+        (a, b) =>
+          a.daysLeft - b.daysLeft
+      )
+      .map((group) => {
+        const medianFare =
+          calculateMedian(
+            group.prices
+          );
+
+        const averageIndex =
+          group.indexes.length > 0
+            ? group.indexes.reduce(
+                (sum, value) =>
+                  sum + value,
+                0
+              ) /
+              group.indexes.length
+            : 100;
+
+        return {
+          daysLeft: group.daysLeft,
+
+          dayLabel:
+            `${group.daysLeft} day${
+              group.daysLeft === 1
+                ? ''
+                : 's'
+            }`,
+
+          price:
+            Math.round(medianFare),
+
+          index:
+            Number(
+              averageIndex.toFixed(2)
+            ),
+
+          flightCount:
+            group.count,
+        };
+      });
+  }, [routeFlights]);
+
+
+  /* =======================================================
+     ROUTE SUMMARY
+  ======================================================= */
+
+  const summary = useMemo(() => {
+    if (!routeFlights.length) {
+      return {
+        averagePrice: 0,
+        averageIndex: 100,
+        totalFlights: 0,
+        minPrice: 0,
+        maxPrice: 0,
+        trend: 'stable',
+        trendPercentage: 0,
+      };
+    }
+
+    const prices = routeFlights
+      .map((flight) =>
+        Number(flight.Price)
+      )
+      .filter(Number.isFinite);
+
+    const indexes = routeFlights
+      .map((flight) =>
+        Number(flight.Airfare_Index)
+      )
+      .filter(Number.isFinite);
+
+
+    const averagePrice =
+      prices.length > 0
+        ? prices.reduce(
+            (sum, price) =>
+              sum + price,
+            0
+          ) / prices.length
+        : 0;
+
+
+    const averageIndex =
+      indexes.length > 0
+        ? indexes.reduce(
+            (sum, index) =>
+              sum + index,
+            0
+          ) / indexes.length
+        : 100;
+
+
+    /* -------------------------------------------------------
+       EARLY VS LAST-MINUTE
+    ------------------------------------------------------- */
+
+    const earlyFlights =
+      routeFlights.filter(
+        (flight) =>
+          flight.Booking_Window ===
+          'Early booking'
+      );
+
+
+    const normalFlights =
+      routeFlights.filter(
+        (flight) =>
+          flight.Booking_Window ===
+          'Normal'
+      );
+
+
+    const lastMinuteFlights =
+      routeFlights.filter(
+        (flight) =>
+          flight.Booking_Window ===
+          'Last minute'
+      );
+
+
+    const calculateAverage = (
+      flights
+    ) => {
+      if (!flights.length) {
+        return 0;
+      }
+
+      const total = flights.reduce(
+        (sum, flight) =>
+          sum +
+          (Number(flight.Price) || 0),
+        0
+      );
+
+      return total / flights.length;
+    };
+
+
+    const earlyAverage =
+      calculateAverage(
+        earlyFlights
+      );
+
+    const normalAverage =
+      calculateAverage(
+        normalFlights
+      );
+
+    const lastMinuteAverage =
+      calculateAverage(
+        lastMinuteFlights
+      );
+
+
+    let trend = 'stable';
+
+    let trendPercentage = 0;
+
+
+    if (
+      earlyAverage > 0 &&
+      lastMinuteAverage > 0
+    ) {
+      trendPercentage =
+        ((lastMinuteAverage -
+          earlyAverage) /
+          earlyAverage) *
+        100;
+
+
+      if (trendPercentage > 3) {
+        trend = 'increasing';
+      } else if (
+        trendPercentage < -3
+      ) {
+        trend = 'decreasing';
+      }
+    }
+
+
+    return {
+      averagePrice:
+        Math.round(averagePrice),
+
+      averageIndex:
+        Number(
+          averageIndex.toFixed(2)
+        ),
+
+      totalFlights:
+        routeFlights.length,
+
+      minPrice:
+        prices.length > 0
+          ? Math.min(...prices)
+          : 0,
+
+      maxPrice:
+        prices.length > 0
+          ? Math.max(...prices)
+          : 0,
+
+      trend,
+
+      trendPercentage:
+        Number(
+          trendPercentage.toFixed(1)
+        ),
+    };
+  }, [routeFlights]);
+
+
+  /* =======================================================
+     BOOKING WINDOW SUMMARY
+  ======================================================= */
+
+  const bookingSummary = useMemo(() => {
+    const result = {
+      early: {
+        total: 0,
+        count: 0,
+      },
+
+      normal: {
+        total: 0,
+        count: 0,
+      },
+
+      lastMinute: {
+        total: 0,
+        count: 0,
+      },
+    };
+
+
+    routeFlights.forEach((flight) => {
+      const price =
+        Number(flight.Price) || 0;
+
+
+      if (
+        flight.Booking_Window ===
+        'Early booking'
+      ) {
+        result.early.total += price;
+        result.early.count += 1;
+      }
+
+
+      if (
+        flight.Booking_Window ===
+        'Normal'
+      ) {
+        result.normal.total += price;
+        result.normal.count += 1;
+      }
+
+
+      if (
+        flight.Booking_Window ===
+        'Last minute'
+      ) {
+        result.lastMinute.total +=
+          price;
+
+        result.lastMinute.count += 1;
+      }
+    });
+
+
+    const average = (item) => {
+      if (!item.count) {
+        return 0;
+      }
+
+      return Math.round(
+        item.total / item.count
+      );
+    };
+
+
+    return {
+      early: average(
+        result.early
+      ),
+
+      normal: average(
+        result.normal
+      ),
+
+      lastMinute: average(
+        result.lastMinute
+      ),
+    };
+  }, [routeFlights]);
+
+
+  /* =======================================================
+     BOOKING INSIGHT
+  ======================================================= */
+
+  const bookingInsight = useMemo(() => {
+    const {
+      early,
+      normal,
+      lastMinute,
+    } = bookingSummary;
+
+
+    if (!early && !normal && !lastMinute) {
+      return {
+        title: 'Insufficient booking-window data',
+        text: 'There is not enough historical booking-window data for this route.',
+      };
+    }
+
+
+    const values = [
+      {
+        name: 'Early booking',
+        price: early,
+      },
+      {
+        name: 'Normal',
+        price: normal,
+      },
+      {
+        name: 'Last minute',
+        price: lastMinute,
+      },
+    ].filter(
+      (item) => item.price > 0
+    );
+
+
+    if (!values.length) {
+      return {
+        title: 'Historical pattern available',
+        text: 'Booking-window prices are available for this route.',
+      };
+    }
+
+
+    const lowest = [...values].sort(
+      (a, b) =>
+        a.price - b.price
+    )[0];
+
+
+    const highest = [...values].sort(
+      (a, b) =>
+        b.price - a.price
+    )[0];
+
+
+    return {
+      title:
+        `${lowest.name} has the lowest historical fare`,
+
+      text:
+        `${lowest.name} shows an average historical fare of ${formatCurrency(
+          lowest.price
+        )}, while ${highest.name} averages ${formatCurrency(
+          highest.price
+        )}. This describes observed historical behaviour, not a guaranteed future price.`,
+    };
+  }, [bookingSummary]);
+
+
+  /* =======================================================
+     TREND ICON
+  ======================================================= */
+
+  const TrendIcon = () => {
+    if (
+      summary.trend ===
+      'increasing'
+    ) {
+      return (
+        <TrendingUp className="w-5 h-5" />
+      );
+    }
+
+
+    if (
+      summary.trend ===
+      'decreasing'
+    ) {
+      return (
+        <TrendingDown className="w-5 h-5" />
+      );
+    }
+
+
+    return (
+      <Minus className="w-5 h-5" />
+    );
+  };
+
+
+  /* =======================================================
+     LOADING
+  ======================================================= */
+
+  if (loading) {
+    return (
+      <Loading
+        message="Loading airfare outlook from CSV data..."
+      />
+    );
   }
+
+
+  /* =======================================================
+     ERROR
+  ======================================================= */
 
   if (error) {
-    return <ErrorMessage message={error} onRetry={fetchData} />;
+    return (
+      <ErrorMessage
+        message={error}
+        onRetry={fetchData}
+      />
+    );
   }
+
+
+  /* =======================================================
+     RENDER
+  ======================================================= */
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Header */}
+
+
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
+
       <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/90 shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                Forecast / Model Output
+
+            <div className="flex items-center gap-2 mb-2">
+
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                Data-Driven Outlook
               </span>
-              <span className="text-xs text-slate-400">Step 9 Specification</span>
+
+              <span className="text-xs text-slate-400">
+                Booking Window Analysis
+              </span>
+
             </div>
+
+
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
               Airfare Forecast
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-              Forward projection structure ready for machine learning model linkage
+
+
+            <p className="text-sm text-slate-500 mt-1">
+              Historical fare behaviour by days left before travel
             </p>
+
           </div>
 
-          {/* Route selector */}
-          <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200 self-start md:self-auto">
+
+          {/* ROUTE SELECTOR */}
+
+          <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200">
+
             <select
               value={selectedSource}
-              onChange={(e) => setSelectedSource(e.target.value)}
-              className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+              onChange={(event) =>
+                setSelectedSource(
+                  event.target.value
+                )
+              }
+              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
             >
-              {sources.map((s) => (
-                <option key={`fsrc-${s}`} value={s}>
-                  {s}
-                </option>
-              ))}
+
+              {sources.map(
+                (source) => (
+                  <option
+                    key={source}
+                    value={source}
+                  >
+                    {source}
+                  </option>
+                )
+              )}
+
             </select>
 
-            <span className="text-slate-400 text-xs">→</span>
+
+            <span className="text-slate-400">
+              →
+            </span>
+
 
             <select
               value={selectedDestination}
-              onChange={(e) => setSelectedDestination(e.target.value)}
-              className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+              onChange={(event) =>
+                setSelectedDestination(
+                  event.target.value
+                )
+              }
+              className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
             >
-              {destinations.map((d) => (
-                <option key={`fdst-${d}`} value={d}>
-                  {d}
-                </option>
-              ))}
+
+              {destinations.map(
+                (destination) => (
+                  <option
+                    key={destination}
+                    value={destination}
+                  >
+                    {destination}
+                  </option>
+                )
+              )}
+
             </select>
+
           </div>
+
         </div>
+
       </div>
 
-      {/* Prominent Demo / Placeholder Notice (Step 9 Requirement) */}
-      <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4 sm:p-5 text-amber-900 shadow-2xs">
+
+      {/* =====================================================
+          DATA EXPLANATION
+      ===================================================== */}
+
+      <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4">
+
         <div className="flex items-start gap-3">
-          <div className="p-1.5 rounded-xl bg-amber-100 text-amber-800 shrink-0 mt-0.5">
-            <AlertCircle className="w-5 h-5" />
+
+          <div className="p-1.5 rounded-xl bg-blue-100 text-blue-700 shrink-0">
+
+            <Info className="w-5 h-5" />
+
           </div>
+
+
           <div>
-            <h3 className="text-sm font-bold text-amber-900">
-              Model Output Notice
+
+            <h3 className="text-sm font-bold text-blue-900">
+              How this outlook works
             </h3>
-            <p className="text-xs text-amber-800 mt-1 leading-relaxed">
-              <strong>Forecast will be connected to the backend ML model.</strong> The current historical CSV dataset contains historical observations. This UI structure is fully prepared to consume predictions from an ML backend microservice (e.g. ARIMA / Prophet / LSTM) via <code>GET /api/forecast</code>.
+
+
+            <p className="text-xs text-blue-800 mt-1 leading-relaxed">
+
+              This analysis uses actual historical observations
+              from the CSV dataset. Fares are grouped according
+              to the number of days left before travel and the
+              median fare is calculated for each position.
+              Therefore, the chart represents a historical
+              booking-window pattern rather than a guaranteed
+              future calendar prediction.
+
             </p>
+
           </div>
+
         </div>
+
       </div>
 
-      {/* Forecast Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-            CSV Baseline Fare
-          </span>
-          <div className="text-2xl font-bold font-mono text-slate-900">
-            {formatCurrency(forecastData?.currentPrice || 6500)}
-          </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
-            Actual mean from CSV for {selectedSource} → {selectedDestination}
-          </span>
-        </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-            Predicted Airfare Index
-          </span>
-          <div className="text-2xl font-bold font-mono text-indigo-600">
-            {forecastData?.currentIndex || '104.2'}
-          </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
-            Expected 7-day weighted index
-          </span>
-        </div>
+      {/* =====================================================
+          METRIC CARDS
+      ===================================================== */}
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-            Expected Price Trend
-          </span>
-          <div className="flex items-center gap-1.5">
-            <TrendingUp className="w-4 h-4 text-rose-600" />
-            <span className="text-xl font-bold font-mono text-rose-600">
-              {forecastData?.trend || 'Increasing'}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+
+        {/* AVERAGE PRICE */}
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
+
+          <div className="flex items-center justify-between">
+
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Route Average Fare
             </span>
+
+
+            <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
+
+              <Plane className="w-4 h-4" />
+
+            </div>
+
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
-            Projected upward demand trajectory
+
+
+          <div className="text-2xl font-bold font-mono text-slate-900 mt-2">
+
+            {formatCurrency(
+              summary.averagePrice
+            )}
+
+          </div>
+
+
+          <span className="text-[11px] text-slate-400">
+
+            {summary.totalFlights.toLocaleString(
+              'en-IN'
+            )}{' '}
+            historical observations
+
           </span>
+
         </div>
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-            Confidence Information
-          </span>
-          <div className="text-2xl font-bold font-mono text-emerald-600">
-            {((forecastData?.confidence || 0.86) * 100).toFixed(0)}%
-          </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
-            Forecast Horizon: 7 Days (± ₹300)
-          </span>
-        </div>
-      </div>
 
-      {/* Forecast Chart */}
-      <ChartCard
-        title={`7-Day Predicted Airfare Trend (${selectedSource} → ${selectedDestination})`}
-        subtitle="UI demonstration chart ready for live ML endpoint response"
-        badge="Forecast / Model Output"
-        badgeBg="bg-amber-50 text-amber-800 border-amber-200"
-      >
-        <div className="h-80 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart
-              data={forecastData?.forecast || []}
-              margin={{ top: 10, right: 15, left: -10, bottom: 0 }}
+        {/* AIRFARE INDEX */}
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
+
+          <div className="flex items-center justify-between">
+
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Airfare Index
+            </span>
+
+
+            <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
+
+              <BarChart3 className="w-4 h-4" />
+
+            </div>
+
+          </div>
+
+
+          <div className="text-2xl font-bold font-mono text-indigo-600 mt-2">
+
+            {summary.averageIndex}
+
+          </div>
+
+
+          <span className="text-[11px] text-slate-400">
+            Route historical average
+          </span>
+
+        </div>
+
+
+        {/* BOOKING TREND */}
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
+
+          <div className="flex items-center justify-between">
+
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Booking Trend
+            </span>
+
+
+            <div
+              className={`p-2 rounded-xl ${
+                summary.trend ===
+                'increasing'
+                  ? 'bg-rose-50 text-rose-600'
+                  : summary.trend ===
+                    'decreasing'
+                  ? 'bg-emerald-50 text-emerald-600'
+                  : 'bg-slate-100 text-slate-500'
+              }`}
             >
-              <defs>
-                <linearGradient id="forecastArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#818cf8" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#818cf8" stopOpacity={0.0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis
-                dataKey="day"
-                tickLine={false}
-                axisLine={{ stroke: '#e2e8f0' }}
-                tick={{ fill: '#64748b', fontSize: 12 }}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={{ stroke: '#e2e8f0' }}
-                tick={{ fill: '#64748b', fontSize: 12 }}
-                tickFormatter={(v) => `₹${(v / 1000).toFixed(1)}k`}
-              />
-              <Tooltip
-                formatter={(val, name) => [
-                  name === 'price'
-                    ? formatCurrency(val)
-                    : name === 'index'
-                    ? `${val}`
-                    : formatCurrency(val),
-                  name === 'price'
-                    ? 'Predicted Fare'
-                    : name === 'index'
-                    ? 'Airfare Index'
-                    : name,
-                ]}
-                contentStyle={{
-                  backgroundColor: '#0f172a',
-                  border: 'none',
-                  borderRadius: '0.75rem',
-                  color: '#fff',
-                  fontSize: '12px',
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="upperBound"
-                stroke="none"
-                fill="url(#forecastArea)"
-              />
-              <Line
-                type="monotone"
-                dataKey="price"
-                stroke="#4f46e5"
-                strokeWidth={3}
-                dot={{ r: 5, fill: '#4f46e5', strokeWidth: 2, stroke: '#ffffff' }}
-                activeDot={{ r: 7 }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      </ChartCard>
 
-      {/* Backend API Integration Contract (Step 9 & 11) */}
-      <div className="bg-slate-900 text-slate-200 rounded-2xl p-5 sm:p-6 border border-slate-800 shadow-md">
-        <div className="flex items-center gap-2 mb-2">
-          <Code2 className="w-5 h-5 text-indigo-400" />
-          <h4 className="text-sm font-bold text-white">
-            Backend REST API Specification (GET /api/forecast)
-          </h4>
-        </div>
-        <p className="text-xs text-slate-400 mb-3 leading-relaxed">
-          The frontend service <code>src/services/api.js</code> is already configured to seamlessly proxy to your Python / Node forecasting service when <code>VITE_API_BASE_URL</code> is set. Expected response format:
-        </p>
-        <pre className="bg-slate-950 p-4 rounded-xl text-xs text-emerald-400 font-mono overflow-x-auto border border-slate-800">
-{`GET /api/forecast?source=${selectedSource}&destination=${selectedDestination}
+              <TrendIcon />
 
-Response 200 OK:
-{
-  "route": "${selectedSource} → ${selectedDestination}",
-  "currentPrice": ${forecastData?.currentPrice || 6500},
-  "predictedAirfareIndex": 108.5,
-  "trend": "increasing",
-  "confidence": 0.86,
-  "forecast": [
-    { "day": "Day 1", "price": 6630, "lowerBound": 6330, "upperBound": 6980 },
-    { "day": "Day 2", "price": 6760, "lowerBound": 6460, "upperBound": 7110 }
-  ]
-}`}
-        </pre>
+            </div>
+
+          </div>
+
+
+          <div
+            className={`flex items-center gap-2 mt-2 text-xl font-bold ${
+              summary.trend ===
+              'increasing'
+                ? 'text-rose-600'
+                : summary.trend ===
+                  'decreasing'
+                ? 'text-emerald-600'
+                : 'text-slate-600'
+            }`}
+          >
+
+            <span className="capitalize">
+              {summary.trend}
+            </span>
+
+          </div>
+
+
+          <span className="text-[11px] text-slate-400">
+
+            {summary.trendPercentage !== 0
+              ? `${summary.trendPercentage > 0 ? '+' : ''}${summary.trendPercentage}% early vs last minute`
+              : 'Early booking vs last minute'}
+
+          </span>
+
+        </div>
+
+
+        {/* PRICE RANGE */}
+
+        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
+
+          <div className="flex items-center justify-between">
+
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Historical Price Range
+            </span>
+
+
+            <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
+
+              <CalendarDays className="w-4 h-4" />
+
+            </div>
+
+          </div>
+
+
+          <div className="text-lg font-bold font-mono text-slate-900 mt-2">
+
+            {formatCurrency(
+              summary.minPrice
+            )}
+
+            {' – '}
+
+            {formatCurrency(
+              summary.maxPrice
+            )}
+
+          </div>
+
+
+          <span className="text-[11px] text-slate-400">
+            Observed on selected route
+          </span>
+
+        </div>
+
       </div>
+
+
+      {/* =====================================================
+          MAIN HISTORICAL PATTERN CHART
+      ===================================================== */}
+
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/90 shadow-xs">
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+
+          <div>
+
+            <div className="flex items-center gap-2">
+
+              <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                15-Day Fare Outlook
+              </h2>
+
+
+              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                Historical Pattern
+              </span>
+
+            </div>
+
+
+            <p className="text-xs text-slate-500 mt-1">
+
+              Median fare observed at each days-left
+              position for{' '}
+              {selectedSource} → {selectedDestination}
+
+            </p>
+
+          </div>
+
+
+          <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl">
+
+            Days left: <strong>1–15</strong>
+
+          </div>
+
+        </div>
+
+
+        <div className="h-80 w-full">
+
+          {forecastData.length > 0 ? (
+
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+            >
+
+              <ComposedChart
+                data={forecastData}
+                margin={{
+                  top: 10,
+                  right: 15,
+                  left: -10,
+                  bottom: 5,
+                }}
+              >
+
+                <defs>
+
+                  <linearGradient
+                    id="fareGradient"
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="1"
+                  >
+
+                    <stop
+                      offset="5%"
+                      stopColor="#6366f1"
+                      stopOpacity={0.22}
+                    />
+
+                    <stop
+                      offset="95%"
+                      stopColor="#6366f1"
+                      stopOpacity={0}
+                    />
+
+                  </linearGradient>
+
+                </defs>
+
+
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  vertical={false}
+                  stroke="#f1f5f9"
+                />
+
+
+                <XAxis
+                  dataKey="daysLeft"
+                  tickLine={false}
+                  axisLine={{
+                    stroke: '#e2e8f0',
+                  }}
+                  tick={{
+                    fill: '#64748b',
+                    fontSize: 12,
+                  }}
+                  label={{
+                    value:
+                      'Days Left Before Travel',
+                    position:
+                      'insideBottom',
+                    offset: -2,
+                    fill: '#64748b',
+                    fontSize: 11,
+                  }}
+                />
+
+
+                <YAxis
+                  tickLine={false}
+                  axisLine={{
+                    stroke: '#e2e8f0',
+                  }}
+                  tick={{
+                    fill: '#64748b',
+                    fontSize: 12,
+                  }}
+                  tickFormatter={(value) =>
+                    `₹${(
+                      value / 1000
+                    ).toFixed(0)}k`
+                  }
+                />
+
+
+                <Tooltip
+                  content={({
+                    active,
+                    payload,
+                  }) => {
+
+                    if (
+                      !active ||
+                      !payload ||
+                      !payload.length
+                    ) {
+                      return null;
+                    }
+
+
+                    const data =
+                      payload[0].payload;
+
+
+                    return (
+
+                      <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl text-xs">
+
+                        <div className="font-semibold text-slate-200 mb-2">
+
+                          {data.daysLeft}{' '}
+
+                          {data.daysLeft === 1
+                            ? 'day'
+                            : 'days'}{' '}
+
+                          before travel
+
+                        </div>
+
+
+                        <div className="space-y-1">
+
+                          <div className="flex justify-between gap-5">
+
+                            <span className="text-slate-400">
+                              Median Fare
+                            </span>
+
+                            <strong className="text-indigo-300">
+
+                              {formatCurrency(
+                                data.price
+                              )}
+
+                            </strong>
+
+                          </div>
+
+
+                          <div className="flex justify-between gap-5">
+
+                            <span className="text-slate-400">
+                              Airfare Index
+                            </span>
+
+                            <strong>
+                              {data.index}
+                            </strong>
+
+                          </div>
+
+
+                          <div className="flex justify-between gap-5">
+
+                            <span className="text-slate-400">
+                              Observations
+                            </span>
+
+                            <strong>
+
+                              {data.flightCount.toLocaleString(
+                                'en-IN'
+                              )}
+
+                            </strong>
+
+                          </div>
+
+                        </div>
+
+                      </div>
+
+                    );
+                  }}
+                />
+
+
+                <Area
+                  type="monotone"
+                  dataKey="price"
+                  stroke="none"
+                  fill="url(#fareGradient)"
+                />
+
+
+                <Line
+                  type="monotone"
+                  dataKey="price"
+                  stroke="#4f46e5"
+                  strokeWidth={3}
+                  dot={{
+                    r: 4,
+                    fill: '#4f46e5',
+                    strokeWidth: 2,
+                    stroke: '#ffffff',
+                  }}
+                  activeDot={{
+                    r: 6,
+                    fill: '#3730a3',
+                  }}
+                />
+
+              </ComposedChart>
+
+            </ResponsiveContainer>
+
+          ) : (
+
+            <div className="h-full flex items-center justify-center">
+
+              <div className="text-center">
+
+                <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+
+                <p className="text-sm font-semibold text-slate-700">
+                  Not enough route data
+                </p>
+
+                <p className="text-xs text-slate-400 mt-1">
+                  Try another source or destination.
+                </p>
+
+              </div>
+
+            </div>
+
+          )}
+
+        </div>
+
+
+        <div className="mt-4 pt-4 border-t border-slate-100 text-[11px] text-slate-500">
+
+          <strong className="text-slate-700">
+            Interpretation:
+          </strong>{' '}
+
+          A point represents the median fare historically
+          observed when that many days were left before travel.
+          The pattern should not be interpreted as a guaranteed
+          future ticket price.
+
+        </div>
+
+      </div>
+
+
+      {/* =====================================================
+          BOOKING WINDOW COMPARISON
+      ===================================================== */}
+
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/90 shadow-xs">
+
+        <div className="mb-5">
+
+          <div className="flex items-center gap-2">
+
+            <h2 className="text-base sm:text-lg font-bold text-slate-900">
+              Booking Window Price Comparison
+            </h2>
+
+
+            <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+              Actual CSV Data
+            </span>
+
+          </div>
+
+
+          <p className="text-xs text-slate-500 mt-1">
+            Historical average fare by booking category
+          </p>
+
+        </div>
+
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+
+          {/* EARLY */}
+
+          <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200">
+
+            <div className="text-xs font-semibold text-emerald-700">
+              Early Booking
+            </div>
+
+
+            <div className="text-2xl font-bold font-mono text-slate-900 mt-2">
+
+              {bookingSummary.early
+                ? formatCurrency(
+                    bookingSummary.early
+                  )
+                : 'No data'}
+
+            </div>
+
+
+            <p className="text-[11px] text-slate-500 mt-1">
+              Historical average fare
+            </p>
+
+          </div>
+
+
+          {/* NORMAL */}
+
+          <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-200">
+
+            <div className="text-xs font-semibold text-indigo-700">
+              Normal
+            </div>
+
+
+            <div className="text-2xl font-bold font-mono text-slate-900 mt-2">
+
+              {bookingSummary.normal
+                ? formatCurrency(
+                    bookingSummary.normal
+                  )
+                : 'No data'}
+
+            </div>
+
+
+            <p className="text-[11px] text-slate-500 mt-1">
+              Historical average fare
+            </p>
+
+          </div>
+
+
+          {/* LAST MINUTE */}
+
+          <div className="p-4 rounded-2xl bg-rose-50/60 border border-rose-200">
+
+            <div className="text-xs font-semibold text-rose-700">
+              Last Minute
+            </div>
+
+
+            <div className="text-2xl font-bold font-mono text-slate-900 mt-2">
+
+              {bookingSummary.lastMinute
+                ? formatCurrency(
+                    bookingSummary.lastMinute
+                  )
+                : 'No data'}
+
+            </div>
+
+
+            <p className="text-[11px] text-slate-500 mt-1">
+              Historical average fare
+            </p>
+
+          </div>
+
+        </div>
+
+      </div>
+
+
+      {/* =====================================================
+          DATA INSIGHT
+      ===================================================== */}
+
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/90 shadow-xs">
+
+        <div className="flex items-start gap-3">
+
+          <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 shrink-0">
+
+            <BarChart3 className="w-5 h-5" />
+
+          </div>
+
+
+          <div>
+
+            <h3 className="text-sm font-bold text-slate-900">
+              Booking Window Insight
+            </h3>
+
+
+            <p className="text-sm font-semibold text-indigo-700 mt-1">
+              {bookingInsight.title}
+            </p>
+
+
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+              {bookingInsight.text}
+            </p>
+
+          </div>
+
+        </div>
+
+      </div>
+
+
+      {/* =====================================================
+          ROUTE DATA SUMMARY
+      ===================================================== */}
+
+      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+
+          <div>
+
+            <div className="flex items-center gap-2">
+
+              <span className="text-xs font-semibold text-slate-700">
+                Selected Route
+              </span>
+
+
+              <span className="px-2 py-1 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-indigo-600">
+                {selectedSource} → {selectedDestination}
+              </span>
+
+            </div>
+
+
+            <p className="text-[11px] text-slate-400 mt-1">
+
+              {summary.totalFlights.toLocaleString(
+                'en-IN'
+              )}{' '}
+              records available for this route
+
+            </p>
+
+          </div>
+
+
+          <button
+            type="button"
+            onClick={fetchData}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition"
+          >
+
+            <RefreshCw className="w-3.5 h-3.5" />
+
+            Reload CSV Data
+
+          </button>
+
+        </div>
+
+      </div>
+
+
+      {/* =====================================================
+          FOOTNOTE
+      ===================================================== */}
+
+      <div className="flex items-start gap-2 text-[11px] text-slate-400 px-1">
+
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+
+        <p>
+
+          Source: SIH_AirIndex_Final_Index.csv.
+          The outlook is calculated from observed historical
+          fares using the Price, Days_Left, Airfare_Index and
+          Booking_Window fields. No hard-coded fare values are
+          used in the analysis.
+
+        </p>
+
+      </div>
+
     </div>
   );
 };
+
 
 export default Forecast;

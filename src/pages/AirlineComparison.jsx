@@ -215,7 +215,7 @@ const AirlineComparison = () => {
             ? 'Average Airfare Index'
             : 'Number of Flights'
         })`}
-        subtitle="Visualizing carrier performance from Flight_Data_Final_Index.csv"
+subtitle="Comparing airline performance using the SIH AirIndex dataset"
         badge="Comparison Chart"
         badgeBg="bg-indigo-50 text-indigo-700 border-indigo-200"
         action={
