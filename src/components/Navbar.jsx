@@ -29,9 +29,6 @@ const Navbar = ({ onToggleSidebar, isSidebarOpen }) => {
                   <span className="font-bold text-slate-900 tracking-tight text-base sm:text-lg">
                     India Airfare Index
                   </span>
-                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200/60">
-                    CPI Augmentation
-                  </span>
                 </div>
                 <p className="text-[11px] text-slate-500 hidden md:block">
                   SIH26056 • Real-Time Automated Web Scraping & Aviation Analytics

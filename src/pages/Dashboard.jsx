@@ -36,7 +36,6 @@ import {
   Building2,
   Route as RouteIcon,
   RefreshCw,
-  FileSpreadsheet,
   Layers,
 } from 'lucide-react';
 
@@ -142,12 +141,6 @@ const Dashboard = () => {
       {/* Top Header Section (Step 3) */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>CSV Data Ingested (10,462 Records)</span>
-            </span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
             India Airfare Price Index
           </h1>
