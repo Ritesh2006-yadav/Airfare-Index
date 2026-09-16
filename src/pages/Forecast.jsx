@@ -20,12 +20,17 @@ import {
   BarChart3,
   AlertTriangle,
   RefreshCw,
+  Brain,
+  Sparkles,
+  ShieldAlert,
 } from 'lucide-react';
 
 import {
   loadFlightData,
   formatCurrency,
 } from '../services/flightDataService';
+
+import { api } from '../services/api';
 
 import Loading from '../components/Loading';
 import ErrorMessage from '../components/ErrorMessage';
@@ -67,6 +72,12 @@ const Forecast = () => {
 
   const [selectedDestination, setSelectedDestination] =
     useState('Mumbai');
+
+  const [aiForecast, setAiForecast] = useState(null);
+
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const [aiError, setAiError] = useState(null);
 
 
   /* =======================================================
@@ -192,6 +203,72 @@ const Forecast = () => {
     selectedSource,
     selectedDestination,
   ]);
+
+
+  const representativeFlight =
+    routeFlights[0] || null;
+
+
+  const loadAIForecast = async (
+    sampleFlight = representativeFlight
+  ) => {
+    if (!sampleFlight) {
+      setAiForecast(null);
+      setAiError('No flight data available for this route.');
+      return;
+    }
+
+    try {
+      setAiLoading(true);
+      setAiError(null);
+
+      const airline = sampleFlight.Airline || 'Vistara';
+      const departureTime = sampleFlight.Departure_Time || 'Morning';
+      const arrivalTime = sampleFlight.Arrival_Time || 'Evening';
+      const flightClass = sampleFlight.Class || 'Economy';
+      const daysLeft = Number(sampleFlight.Days_Left) || 15;
+      const stopsNumeric = Number(sampleFlight.Total_Stops) || 0;
+      const durationMinutes = Number(sampleFlight.Duration_Minutes) || 120;
+
+      let bookingWindow = sampleFlight.Booking_Window || 'Normal';
+
+      if (bookingWindow === 'Early booking') {
+        bookingWindow = 'Early';
+      }
+
+      const result = await api.getForecast(
+        selectedSource,
+        selectedDestination,
+        airline,
+        departureTime,
+        arrivalTime,
+        flightClass,
+        daysLeft,
+        stopsNumeric,
+        durationMinutes,
+        bookingWindow
+      );
+
+      setAiForecast(result);
+    } catch (err) {
+      console.error('AI forecast error:', err);
+      setAiForecast(null);
+      setAiError(err?.message || 'Backend ML API unavailable');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (!representativeFlight) {
+      setAiForecast(null);
+      return;
+    }
+
+    loadAIForecast(representativeFlight);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [representativeFlight, selectedSource, selectedDestination]);
 
 
   /* =======================================================
@@ -764,8 +841,9 @@ const Forecast = () => {
             </h1>
 
 
-            <p className="text-sm text-slate-500 mt-1">
-              Historical fare behaviour by days left before travel
+              <p className="text-sm text-slate-500 mt-1">
+    Historical booking patterns + AI/ML fare prediction
+
             </p>
 
           </div>
@@ -830,6 +908,430 @@ const Forecast = () => {
           </div>
 
         </div>
+
+      </div>
+
+
+      {/* =====================================================
+          AI FORECAST
+      ===================================================== */}
+
+      <div className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 rounded-2xl p-5 sm:p-6 border border-indigo-200 shadow-sm">
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+
+          <div>
+
+            <div className="flex items-center gap-2">
+
+              <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700">
+
+                <Brain className="w-5 h-5" />
+
+              </div>
+
+              <div>
+
+                <h2 className="text-base sm:text-lg font-bold text-slate-900">
+
+                  AI Fare Prediction
+
+                </h2>
+
+                <p className="text-xs text-slate-500">
+
+                  Powered by the FastAPI ML backend
+
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <button
+
+            type="button"
+
+            onClick={loadAIForecast}
+
+            disabled={aiLoading || !representativeFlight}
+
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition"
+
+          >
+
+            <RefreshCw className={`w-4 h-4 ${aiLoading ? 'animate-spin' : ''}`} />
+
+            {aiLoading ? 'Running ML...' : 'Refresh AI Forecast'}
+
+          </button>
+
+        </div>
+
+
+        {aiLoading && (
+
+          <div className="flex items-center justify-center py-10">
+
+            <div className="text-center">
+
+              <Brain className="w-8 h-8 text-indigo-500 mx-auto mb-3 animate-pulse" />
+
+              <p className="text-sm font-semibold text-slate-700">
+
+                AI model is analysing this route...
+
+              </p>
+
+              <p className="text-xs text-slate-400 mt-1">
+
+                Sending flight features to FastAPI
+
+              </p>
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {!aiLoading && aiError && (
+
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+
+            <div className="flex items-start gap-3">
+
+              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
+
+              <div>
+
+                <p className="text-sm font-semibold text-amber-800">
+
+                  Backend ML API unavailable
+
+                </p>
+
+                <p className="text-xs text-amber-700 mt-1">
+
+                  {aiError}
+
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {!aiLoading && aiForecast && (
+
+          <div className="space-y-5">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+              <div className="bg-white rounded-2xl p-4 border border-indigo-100">
+
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">
+
+                  Predicted Fare
+
+                </span>
+
+                <div className="text-2xl font-bold font-mono text-indigo-600 mt-2">
+
+                  {formatCurrency(aiForecast.predictedFare || 0)}
+
+                </div>
+
+                <span className="text-[11px] text-slate-400">
+
+                  ML prediction
+
+                </span>
+
+              </div>
+
+
+              <div className="bg-white rounded-2xl p-4 border border-indigo-100">
+
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">
+
+                  Airfare Index
+
+                </span>
+
+                <div className="text-2xl font-bold font-mono text-slate-900 mt-2">
+
+                  {Number(aiForecast.airfareIndex || 100).toFixed(2)}
+
+                </div>
+
+                <span className="text-[11px] text-slate-400">
+
+                  100 = benchmark
+
+                </span>
+
+              </div>
+
+
+              <div className="bg-white rounded-2xl p-4 border border-indigo-100">
+
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">
+
+                  Fare Status
+
+                </span>
+
+                <div className="text-xl font-bold text-slate-900 mt-2">
+
+                  {aiForecast.fareStatus || 'Normal'}
+
+                </div>
+
+                <span className="text-[11px] text-slate-400">
+
+                  Relative to benchmark
+
+                </span>
+
+              </div>
+
+
+              <div className="bg-white rounded-2xl p-4 border border-indigo-100">
+
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">
+
+                  Booking Advice
+
+                </span>
+
+                <div className="text-xl font-bold text-indigo-600 mt-2">
+
+                  {aiForecast.bookingAdvice || 'Monitor'}
+
+                </div>
+
+                <span className="text-[11px] text-slate-400">
+
+                  ML booking intelligence
+
+                </span>
+
+              </div>
+
+            </div>
+
+
+            <div className="bg-white rounded-2xl p-5 border border-indigo-100">
+
+              <div className="flex items-start gap-3">
+
+                <div className="p-2 rounded-xl bg-purple-50 text-purple-600 shrink-0">
+
+                  <Sparkles className="w-5 h-5" />
+
+                </div>
+
+                <div>
+
+                  <h3 className="text-sm font-bold text-slate-900">
+
+                    AI Recommendation
+
+                  </h3>
+
+                  <p className="text-sm text-indigo-700 font-semibold mt-1">
+
+                    {aiForecast.aiRecommendation || 'Monitor fare movement before booking.'}
+
+                  </p>
+
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <div className="bg-white rounded-2xl p-5 border border-indigo-100">
+
+              <div className="flex items-center gap-3">
+
+                <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
+
+                  <ShieldAlert className="w-5 h-5" />
+
+                </div>
+
+                <div>
+
+                  <h3 className="text-sm font-bold text-slate-900">
+
+                    Anomaly Detection
+
+                  </h3>
+
+                  <p className="text-xs text-slate-500 mt-1">
+
+                    Current ML classification: {' '}
+
+                    <strong className="text-slate-700">
+
+                      {aiForecast.anomalyDetection || 'Normal'}
+
+                    </strong>
+
+                  </p>
+
+                </div>
+
+              </div>
+
+            </div>
+
+
+            {Array.isArray(aiForecast.forecastTable) && aiForecast.forecastTable.length > 0 && (
+
+              <div className="bg-white rounded-2xl p-5 border border-indigo-100">
+
+                <div className="mb-4">
+
+                  <h3 className="text-sm font-bold text-slate-900">
+
+                    ML Fare Forecast
+
+                  </h3>
+
+                  <p className="text-xs text-slate-500 mt-1">
+
+                    Conditional fare estimates as travel date approaches
+
+                  </p>
+
+                </div>
+
+
+                <div className="overflow-x-auto">
+
+                  <table className="w-full text-sm">
+
+                    <thead>
+
+                      <tr className="border-b border-slate-100">
+
+                        <th className="text-left py-3 px-3 text-[11px] uppercase tracking-wider text-slate-500">
+
+                          Days Left
+
+                        </th>
+
+                        <th className="text-right py-3 px-3 text-[11px] uppercase tracking-wider text-slate-500">
+
+                          Predicted Fare
+
+                        </th>
+
+                        <th className="text-right py-3 px-3 text-[11px] uppercase tracking-wider text-slate-500">
+
+                          Airfare Index
+
+                        </th>
+
+                        <th className="text-right py-3 px-3 text-[11px] uppercase tracking-wider text-slate-500">
+
+                          Booking Window
+
+                        </th>
+
+                        <th className="text-right py-3 px-3 text-[11px] uppercase tracking-wider text-slate-500">
+
+                          Fare Change
+
+                        </th>
+
+                      </tr>
+
+                    </thead>
+
+
+                    <tbody>
+
+                      {aiForecast.forecastTable.map((item, index) => (
+
+                        <tr key={`${item.daysLeft || index}-${index}`} className="border-b border-slate-50">
+
+                          <td className="py-3 px-3 font-semibold text-slate-700">
+
+                            {item.daysLeft}
+
+                          </td>
+
+                          <td className="py-3 px-3 text-right font-mono font-bold text-indigo-600">
+
+                            {formatCurrency(item.predictedFare || 0)}
+
+                          </td>
+
+                          <td className="py-3 px-3 text-right font-mono text-slate-700">
+
+                            {Number(item.index || 100).toFixed(2)}
+
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+
+                            <span
+                              className={`inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-semibold border ${
+                                item.bookingWindow === 'Early'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : item.bookingWindow === 'Normal'
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                  : item.bookingWindow === 'Last minute'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-slate-50 text-slate-700 border-slate-200'
+                              }`}
+                            >
+
+                              {item.bookingWindow || '—'}
+
+                            </span>
+
+                          </td>
+
+                          <td className="py-3 px-3 text-right font-mono text-slate-700">
+
+                            {item.fareChange === null || item.fareChange === undefined || item.fareChange === ''
+                              ? '—'
+                              : `${Number(item.fareChange).toFixed(2)}%`}
+
+                          </td>
+
+                        </tr>
+
+                      ))}
+
+                    </tbody>
+
+                  </table>
+
+                </div>
+
+              </div>
+
+            )}
+
+          </div>
+
+        )}
+
 
       </div>
 

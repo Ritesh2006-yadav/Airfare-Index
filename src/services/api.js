@@ -9,7 +9,7 @@ import {
   formatCurrency,
 } from './flightDataService';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE_URL = 'https://dutiful-vindicate-reveler.ngrok-free.dev';
 
 /**
  * Central API Service Layer (Step 11)
@@ -160,60 +160,186 @@ export const api = {
   },
 
   /**
-   * Forecast (Step 9)
-   * Future ML predictive integration ready.
+   * Forecast (FastAPI ML backend)
    */
-  async getForecast(source = 'Bangalore', destination = 'New Delhi') {
-    if (API_BASE_URL) {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/forecast?source=${source}&destination=${destination}`);
-        if (res.ok) return await res.json();
-      } catch (err) {
-        console.warn('API error, falling back to model structure', err);
-      }
-    }
-
-    const allFlights = await loadFlightData();
-    const routeFlights = allFlights.filter(
-      (f) =>
-        f.Source.toLowerCase() === source.toLowerCase() &&
-        f.Destination.toLowerCase() === destination.toLowerCase()
-    );
-
-    const baseFare =
-      routeFlights.length > 0
-        ? Math.round(routeFlights.reduce((a, b) => a + b.Price, 0) / routeFlights.length)
-        : 6500;
-
-    const baseIndex =
-      routeFlights.length > 0
-        ? Number((routeFlights.reduce((a, b) => a + b.Airfare_Index, 0) / routeFlights.length).toFixed(1))
-        : 100.0;
-
-    // Projected 7-day model structure
-    const days = ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7'];
-    const forecast = days.map((day, idx) => {
-      const delta = Math.round(baseFare * (0.02 * (idx + 1) + (Math.sin(idx) * 0.01)));
-      const price = baseFare + delta;
-      return {
-        day,
-        dayIndex: idx + 1,
-        price,
-        lowerBound: price - 300,
-        upperBound: price + 350,
-        index: Number((baseIndex + (idx * 1.5)).toFixed(1)),
-      };
+  async getForecast(
+    source = 'Bangalore',
+    destination = 'New Delhi',
+    airline = 'Vistara',
+    departureTime = 'Morning',
+    arrivalTime = 'Evening',
+    flightClass = 'Economy',
+    daysLeft = 15,
+    stopsNumeric = 1,
+    durationMinutes = 120,
+    bookingWindow = 'Early'
+  ) {
+    const response = await fetch(`${API_BASE_URL}/predict`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'ngrok-skip-browser-warning': '1',
+      },
+      body: JSON.stringify({
+        route: `${source} -> ${destination}`,
+        airline,
+        departure_time: departureTime,
+        arrival_time: arrivalTime,
+        flight_class: flightClass,
+        days_left: Number(daysLeft),
+        stops_numeric: Number(stopsNumeric),
+        duration_minutes: Number(durationMinutes),
+        booking_window: bookingWindow,
+      }),
     });
 
+    if (!response.ok) {
+      let errorMessage = `FastAPI request failed: ${response.status}`;
+
+      try {
+        const errorBody = await response.json();
+        errorMessage =
+          errorBody?.detail ||
+          errorBody?.message ||
+          errorBody?.error ||
+          errorMessage;
+      } catch (parseError) {
+        // Keep the HTTP status-based message when the response body is not JSON.
+      }
+
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+
+    const predictedFare =
+      Number(
+        data?.predicted_fare ??
+        data?.predictedFare ??
+        data?.['Fare Prediction']?.['Predicted Fare'] ??
+        data?.['Fare Prediction']?.['Predicted Price'] ??
+        0
+      );
+
+    const benchmarkFare = Number(
+      data?.['Fare Prediction']?.['Benchmark Fare'] ??
+      data?.['Fare Prediction']?.['benchmark_fare'] ??
+      0
+    );
+
+    let airfareIndex = Number(
+      data?.airfare_index ??
+      data?.airfareIndex ??
+      data?.['Fare Prediction']?.['Airfare Index'] ??
+      data?.['Fare Prediction']?.['airfare_index'] ??
+      data?.['Fare Prediction']?.['Index'] ??
+      NaN
+    );
+
+    if (!Number.isFinite(airfareIndex)) {
+      airfareIndex =
+        benchmarkFare > 0 && predictedFare > 0
+          ? (predictedFare / benchmarkFare) * 100
+          : 100;
+    }
+
+    const currentPrice = Number.isFinite(predictedFare) ? predictedFare : 0;
+    const currentIndex = Number.isFinite(airfareIndex)
+      ? Number(airfareIndex.toFixed(2))
+      : 100;
+
+    console.log('AirIndex AI mapped forecast response', {
+      currentPrice,
+      currentIndex,
+      predictedFare,
+      benchmarkFare,
+      airfareIndex,
+    });
+
+    const fareStatus =
+      data?.fare_status ??
+      data?.fareStatus ??
+      data?.['ML Analysis']?.['Fare Status'] ??
+      '';
+
+    const bookingAdvice =
+      data?.booking_advice ??
+      data?.bookingAdvice ??
+      data?.['Booking Intelligence']?.['Booking Recommendation'] ??
+      data?.['Booking Intelligence']?.['Booking Advice'] ??
+      '';
+
+    const aiRecommendation =
+      data?.ai_recommendation ??
+      data?.aiRecommendation ??
+      data?.['AI Recommendation']?.['Recommendation'] ??
+      '';
+
+    const anomalyDetection =
+      data?.anomaly_detection ??
+      data?.anomalyDetection ??
+      data?.['ML Analysis']?.['Anomaly Status'] ??
+      '';
+
+    const forecastSource =
+      data?.['Fare Forecast']?.Forecast ??
+      data?.forecast_table ??
+      data?.forecastTable ??
+      data?.forecast ??
+      [];
+
+    const forecastTable = Array.isArray(forecastSource)
+      ? forecastSource.map((item) => {
+          const predictedFareValue = Number(
+            item?.['Predicted Fare'] ??
+            item?.predicted_fare ??
+            item?.predictedFare ??
+            item?.price ??
+            0
+          );
+
+          const forecastIndex =
+            benchmarkFare > 0
+              ? (predictedFareValue / benchmarkFare) * 100
+              : 100;
+
+          return {
+            daysLeft:
+              item?.['Days Left'] ??
+              item?.days_left ??
+              item?.daysLeft ??
+              item?.dayIndex ??
+              item?.day ??
+              '',
+            predictedFare: predictedFareValue,
+            index: Number(forecastIndex.toFixed(2)),
+            bookingWindow:
+              item?.['Booking Window'] ??
+              item?.booking_window ??
+              item?.bookingWindow ??
+              '',
+            fareChange:
+              item?.['Fare Change (%)'] ??
+              item?.fare_change ??
+              item?.fareChange ??
+              null,
+          };
+        })
+      : [];
+
     return {
-      isDemoModelOutput: true,
-      route: `${source} → ${destination}`,
-      currentPrice: baseFare,
-      currentIndex: baseIndex,
-      trend: 'Increasing (+8.5%)',
-      confidence: 0.86,
-      forecast,
-      message: 'Forecast will be connected to the backend ML model.',
+      currentPrice,
+      currentIndex,
+      predictedFare,
+      benchmarkFare,
+      airfareIndex,
+      fareStatus,
+      bookingAdvice,
+      aiRecommendation,
+      anomalyDetection,
+      forecastTable,
+      rawResponse: data,
     };
   },
 
